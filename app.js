@@ -1,6 +1,6 @@
 /**
- * @fileoverview Dual-canvas hardware-accelerated infinite background animation engine.
- * Synchronizes twin graphics layers to offload blur masking onto CSS GPU compositor threads.
+ * @fileoverview Interactive dual-canvas background animation engine.
+ * Tracks user cursor inputs to drive CSS hardware mask translations in real time.
  */
 
 /**
@@ -18,13 +18,14 @@
  * @property {Array<{offset: number, color: string}>} vignetteColorStops - Color stops mapping the ambient light backdrop.
  */
 
-class HardwareGridEngine {
+class InteractiveGridEngine {
     /**
      * @param {string} sharpCanvasId - DOM ID of the base sharp canvas layer.
      * @param {string} blurredCanvasId - DOM ID of the mirror blurred canvas layer.
+     * @param {string} wrapperId - DOM ID of the outer container box updating styles.
      * @param {Partial<EngineOptions>} [customOptions={}] - Explicit configuration modifications.
      */
-    constructor(sharpCanvasId, blurredCanvasId, customOptions = {}) {
+    constructor(sharpCanvasId, blurredCanvasId, wrapperId, customOptions = {}) {
         /** @private @type {HTMLCanvasElement} */
         this.canvasSharp = document.getElementById(sharpCanvasId);
         /** @private @type {CanvasRenderingContext2D} */
@@ -34,6 +35,9 @@ class HardwareGridEngine {
         this.canvasBlurred = document.getElementById(blurredCanvasId);
         /** @private @type {CanvasRenderingContext2D} */
         this.ctxBlurred = this.canvasBlurred.getContext('2d');
+
+        /** @private @type {HTMLElement} */
+        this.wrapper = document.getElementById(wrapperId);
         
         /**
          * Fallback execution defaults merged seamlessly with user-defined mutations.
@@ -48,11 +52,11 @@ class HardwareGridEngine {
             globalOpacity: 0.4,
             rotationDegrees: -45,
             highlightColor: '#6887d6b4',
-            maxRadiusMultiplier: 0.45,
+            maxRadiusMultiplier: 0.4,
             vignetteColorStops: [
-                { offset: 0.0, color: 'rgba(11, 15, 25, 0.0)' },   // Ambient central lighting pocket
-                { offset: 0.5, color: 'rgba(11, 15, 25, 0.4)' },   // Smooth mid-tone transition gradient
-                { offset: 1.0, color: 'rgba(11, 15, 25, 1.0)' }    // Deep solid boundary background mask
+                { offset: 0.0, color: 'rgba(11, 15, 25, 0.0)' },   // Dynamic core gradient pocket
+                { offset: 0.7, color: 'rgba(11, 15, 25, 0.4)' },   // Smooth falloff region
+                { offset: 0.9, color: 'rgba(11, 15, 25, 1.0)' }    // Deep backdrop perimeter mask
             ],
             ...customOptions
         };
@@ -72,7 +76,7 @@ class HardwareGridEngine {
     }
 
     /**
-     * Bootstraps core subsystems, asset downloading pipelines, and binds viewport tracking events.
+     * Bootstraps core subsystems, asset downloading pipelines, and binds event loops.
      * @private
      * @async
      */
@@ -82,12 +86,16 @@ class HardwareGridEngine {
         this.resizeHandler = () => this.syncViewportResolution();
         window.addEventListener('resize', this.resizeHandler);
 
+        // Bind and activate mouse tracking listener
+        this.mouseHandler = (event) => this.trackCursorMove(event);
+        window.addEventListener('mousemove', this.mouseHandler, { passive: true });
+
         try {
             this.iconImage = await this.fetchIconAsset(this.options.singleIconSrc);
             this.generateGridPatternTexture();
             this.animationPipelineLoop();
         } catch (error) {
-            console.error("Critical architecture compilation fault within HardwareGridEngine:", error);
+            console.error("Critical architecture compilation fault within InteractiveGridEngine:", error);
         }
     }
 
@@ -100,6 +108,21 @@ class HardwareGridEngine {
         this.canvasSharp.height = window.innerHeight;
         this.canvasBlurred.width = window.innerWidth;
         this.canvasBlurred.height = window.innerHeight;
+    }
+
+    /**
+     * Intercepts cursor vector metrics and pushes updates directly into CSS Custom Properties.
+     * @param {MouseEvent} event - Native mousemove browser vector payload.
+     * @private
+     */
+    trackCursorMove(event) {
+        // Calculate raw percentage values across the horizontal and vertical screen space
+        const pctX = ((event.clientX / window.innerWidth) * 100).toFixed(2);
+        const pctY = ((event.clientY / window.innerHeight) * 100).toFixed(2);
+
+        // Directly modify CSS custom variables to trigger smooth hardware-accelerated transitions
+        this.wrapper.style.setProperty('--mouse-x', `${pctX}%`);
+        this.wrapper.style.setProperty('--mouse-y', `${pctY}%`);
     }
 
     /**
@@ -175,11 +198,11 @@ class HardwareGridEngine {
     }
 
     /**
-     * Composites the ambient background vignette layer directly over the base sharp canvas layer.
+     * Composites a static, centered ambient light backdrop to give deep contrast to the canvas plane.
      * @param {CanvasRenderingContext2D} ctx - Target canvas rendering layer context.
      * @private
      */
-    drawBackgroundVignette(ctx) {
+    drawAmbientVignette(ctx) {
         const viewCenterX = this.canvasSharp.width / 2;
         const viewCenterY = this.canvasSharp.height / 2;
         const maxRadius = Math.max(this.canvasSharp.width, this.canvasSharp.height) * this.options.maxRadiusMultiplier;
@@ -200,16 +223,14 @@ class HardwareGridEngine {
     }
 
     /**
-     * High-performance synchronized render pipeline execution loop.
+     * Synchronized high-performance frame animation loop loop step.
      * @private
      */
     animationPipelineLoop() {
-        // Clear frame buffers for both graphics layers
         this.ctxSharp.clearRect(0, 0, this.canvasSharp.width, this.canvasSharp.height);
         this.ctxBlurred.clearRect(0, 0, this.canvasBlurred.width, this.canvasBlurred.height);
 
         if (this.gridPattern) {
-            // Step continuous arithmetic displacements
             this.offsetX += this.options.speedX;
             this.offsetY += this.options.speedY;
             this.offsetX %= this.options.cellGridSize;
@@ -219,18 +240,17 @@ class HardwareGridEngine {
             matrix.translateSelf(this.offsetX, this.offsetY);
             this.gridPattern.setTransform(matrix);
 
-            // 1. Paint the sharp base background canvas layer
+            // 1. Render base sharp background canvas
             this.ctxSharp.save();
             this.ctxSharp.globalAlpha = this.options.globalOpacity;
             this.ctxSharp.fillStyle = this.gridPattern;
             this.ctxSharp.fillRect(0, 0, this.canvasSharp.width, this.canvasSharp.height);
             this.ctxSharp.restore();
             
-            // 2. Overlay ambient gradient directly onto the base sharp layer
-            this.drawBackgroundVignette(this.ctxSharp);
+            // 2. Render static ambient contrast vignette layer over the sharp elements
+            this.drawAmbientVignette(this.ctxSharp);
 
-            // 3. Paint the identical pattern vector matrix onto the blurred mirror layer
-            // CSS handles the sub-pixel interpolation blur transitions seamlessly on its own layer thread
+            // 3. Render identical pattern coordinates to mirror blurred canvas layer
             this.ctxBlurred.save();
             this.ctxBlurred.globalAlpha = this.options.globalOpacity;
             this.ctxBlurred.fillStyle = this.gridPattern;
@@ -250,10 +270,11 @@ class HardwareGridEngine {
             cancelAnimationFrame(this.animationFrameId);
         }
         window.removeEventListener('resize', this.resizeHandler);
+        window.removeEventListener('mousemove', this.mouseHandler);
     }
 }
 
-// Global invocation hook constructor trigger
+// Global invocation initialization trigger
 window.addEventListener('DOMContentLoaded', () => {
-    new HardwareGridEngine('canvas-sharp', 'canvas-blurred');
+    new InteractiveGridEngine('canvas-sharp', 'canvas-blurred', 'bg-box');
 });

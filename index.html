@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hardware Accelerated Smooth Background</title>
+    <title>Cursor Tracking Smooth Background</title>
     <style>
         body {
             margin: 0;
@@ -21,6 +21,10 @@
             height: 100vh;
             z-index: -1;
             pointer-events: none;
+            
+            /* Initializing default center position values for fallback states */
+            --mouse-x: 50%;
+            --mouse-y: 50%;
         }
 
         .bg-layer {
@@ -31,22 +35,23 @@
             height: 100%;
         }
 
-        /* Layer 2: Uses GPU composite threads to process the blur and transition alpha mask smoothly */
+        /* Layer 2: Sharp core area tracks the mouse while surrounding areas blur out */
         #canvas-blurred {
-            filter: blur(8px); /* Clean, native CSS hardware blur */
-            transform: scale(1.02); /* Prevents edge artifacts caused by the blur filter bleeding inward */
+            filter: blur(8px);
+            transform: scale(1.02);
             
-            /* The CSS Mask determines the transition transparency. 
-               The center circle is completely clear (revealing the sharp canvas below), 
-               while it fades smoothly to solid black at the edges (revealing the blurred canvas). */
-            mask-image: radial-gradient(circle, transparent 20%, black 65%);
-            -webkit-mask-image: radial-gradient(circle, transparent 20%, black 65%);
+            /* REDUCED RADIUS BOUNDS:
+            Fades from 0% (transparent / sharp canvas) up to 5% out from the cursor,
+            reaching 100% blur (black) by the time it extends 25% away.
+            */
+            mask-image: radial-gradient(circle at var(--mouse-x) var(--mouse-y), transparent 2.5%, black 25%);
+            -webkit-mask-image: radial-gradient(circle at var(--mouse-x) var(--mouse-y), transparent 5%, black 25%);
         }
     </style>
 </head>
 <body>
 
-    <div class="bg-container">
+    <div class="bg-container" id="bg-box">
         <canvas id="canvas-sharp" class="bg-layer"></canvas>
         <canvas id="canvas-blurred" class="bg-layer"></canvas>
     </div>
