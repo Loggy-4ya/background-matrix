@@ -1,131 +1,149 @@
 /**
- * @fileoverview High-performance infinite pattern background engine.
- * Renders a single rotated icon cell, translates the pattern matrix to simulate global movement,
- * and composites a centered focal radial lighting spotlight.
+ * @fileoverview Dual-canvas hardware-accelerated infinite background animation engine.
+ * Synchronizes twin graphics layers to offload blur masking onto CSS GPU compositor threads.
  */
 
 /**
- * Structural configurations for the infinite uniform grid layout.
- * @typedef {Object} GridConfig
- * @property {string} singleIconSrc - The single icon resource path to enforce consistency.
- * @property {number} cellGridSize - The bounding box size (width & height) of a single grid block.
- * @property {number} iconScaleSize - Output size constraint for the centered icon inside the cell.
- * @property {number} speedX - Horizontal directional pixel displacement per frame tick.
- * @property {number} speedY - Vertical directional pixel displacement per frame tick.
- * @property {number} globalOpacity - Alpha transparency mix layer configuration for the pattern.
- * @property {number} rotationDegrees - Explicit programmatic angle rotation applied to the asset.
+ * Structural configuration schema for the engine instance.
+ * @typedef {Object} EngineOptions
+ * @property {string} singleIconSrc - The resolution path/URL for the target asset.
+ * @property {number} cellGridSize - The absolute dimensions of a single grid block.
+ * @property {number} iconScaleSize - Bounding constraint limit for the scaled icon asset.
+ * @property {number} speedX - Horizontal pixel translation delta per frame step.
+ * @property {number} speedY - Vertical pixel translation delta per frame step.
+ * @property {number} globalOpacity - Rendering alpha value for the repeated pattern fill step.
+ * @property {number} rotationDegrees - Explicit rotation angle applied to the asset.
+ * @property {string} highlightColor - CSS color string used to colorize the icon mask.
+ * @property {number} maxRadiusMultiplier - Radial gradient radius scale for the vignette backdrop.
+ * @property {Array<{offset: number, color: string}>} vignetteColorStops - Color stops mapping the ambient light backdrop.
  */
-const CONFIG = {
-    singleIconSrc: 'logo.svg',
-    cellGridSize: 150,     // Determines the explicit distance spacing boundary between elements
-    iconScaleSize: 109,    // Spatial size footprint of the asset inside its grid cell
-    speedX: 0.15,           // Constant horizontal velocity vector
-    speedY: 0.15,           // Constant vertical velocity vector
-    globalOpacity: 0.4,    // Density alpha value for pattern layout visibility
-    rotationDegrees: -45,  // Programmatic icon rotation parameter
-    highlightColor: '#6887d6b4', // Customizable highlight color
-    maxRadiusMultiplier: 0.45, // Multiplier for calculating the maximum radius of the radial gradient based on viewport dimensions
-    gradientColorStops: [ // Optional array for defining custom gradient color stops, can be used to override default stops in drawCenterSpotlightOverlay
-        { offset: 0.0, color: 'rgba(255, 255, 255, 0.12)' }, // Center ambient light accent
-        { offset: 0.8, color: 'rgba(15, 23, 42, 0.2)' },     // Mid-tone falloff transition
-        { offset: 1.0, color: 'rgba(11, 15, 25, 1.0)' }     // Edge boundary mask blending into background color
-    ]
 
-};
-
-/**
- * Orchestrates the creation of the offscreen texture block, shifts the global pattern matrix,
- * and maps a static center radial lighting layer.
- */
-class InfiniteGridEngine {
+class HardwareGridEngine {
     /**
-     * @param {string} canvasId - DOM query identifier token.
+     * @param {string} sharpCanvasId - DOM ID of the base sharp canvas layer.
+     * @param {string} blurredCanvasId - DOM ID of the mirror blurred canvas layer.
+     * @param {Partial<EngineOptions>} [customOptions={}] - Explicit configuration modifications.
      */
-    constructor(canvasId) {
-        this.canvas = document.getElementById(canvasId);
-        this.ctx = this.canvas.getContext('2d');
-        
-        // Trackers for the global translation offsets of the pattern
-        this.offsetX = 0;
-        this.offsetY = 0;
+    constructor(sharpCanvasId, blurredCanvasId, customOptions = {}) {
+        /** @private @type {HTMLCanvasElement} */
+        this.canvasSharp = document.getElementById(sharpCanvasId);
+        /** @private @type {CanvasRenderingContext2D} */
+        this.ctxSharp = this.canvasSharp.getContext('2d');
 
-        /** @type {CanvasPattern|null} */
+        /** @private @type {HTMLCanvasElement} */
+        this.canvasBlurred = document.getElementById(blurredCanvasId);
+        /** @private @type {CanvasRenderingContext2D} */
+        this.ctxBlurred = this.canvasBlurred.getContext('2d');
+        
+        /**
+         * Fallback execution defaults merged seamlessly with user-defined mutations.
+         * @private @type {EngineOptions}
+         */
+        this.options = {
+            singleIconSrc: 'logo.svg',
+            cellGridSize: 150,
+            iconScaleSize: 109,
+            speedX: 0.15,
+            speedY: 0.15,
+            globalOpacity: 0.4,
+            rotationDegrees: -45,
+            highlightColor: '#6887d6b4',
+            maxRadiusMultiplier: 0.45,
+            vignetteColorStops: [
+                { offset: 0.0, color: 'rgba(11, 15, 25, 0.0)' },   // Ambient central lighting pocket
+                { offset: 0.5, color: 'rgba(11, 15, 25, 0.4)' },   // Smooth mid-tone transition gradient
+                { offset: 1.0, color: 'rgba(11, 15, 25, 1.0)' }    // Deep solid boundary background mask
+            ],
+            ...customOptions
+        };
+
+        /** @private @type {number} */
+        this.offsetX = 0;
+        /** @private @type {number} */
+        this.offsetY = 0;
+        /** @private @type {CanvasPattern|null} */
         this.gridPattern = null;
-        /** @type {HTMLImageElement|null} */
+        /** @private @type {HTMLImageElement|null} */
         this.iconImage = null;
+        /** @private @type {number|null} */
+        this.animationFrameId = null;
 
         this.init();
     }
 
     /**
-     * Initializes engine dependencies and assets asynchronously.
+     * Bootstraps core subsystems, asset downloading pipelines, and binds viewport tracking events.
+     * @private
      * @async
      */
     async init() {
         this.syncViewportResolution();
-        window.addEventListener('resize', () => this.syncViewportResolution());
+        
+        this.resizeHandler = () => this.syncViewportResolution();
+        window.addEventListener('resize', this.resizeHandler);
 
         try {
-            this.iconImage = await this.fetchIconAsset(CONFIG.singleIconSrc);
+            this.iconImage = await this.fetchIconAsset(this.options.singleIconSrc);
             this.generateGridPatternTexture();
             this.animationPipelineLoop();
         } catch (error) {
-            console.error("Failed to build the uniform grid pipeline architecture:", error);
+            console.error("Critical architecture compilation fault within HardwareGridEngine:", error);
         }
     }
 
     /**
-     * Updates main display resolution parameters without breaking structural states.
+     * Resizes internal drawing dimensions for both targets simultaneously.
+     * @private
      */
     syncViewportResolution() {
-        this.canvas.width = window.innerWidth;
-        this.canvas.height = window.innerHeight;
+        this.canvasSharp.width = window.innerWidth;
+        this.canvasSharp.height = window.innerHeight;
+        this.canvasBlurred.width = window.innerWidth;
+        this.canvasBlurred.height = window.innerHeight;
     }
 
     /**
-     * Resolves raw image elements inside asynchronous structural promises.
-     * @param {string} src - Path string to target asset.
+     * Packages resource caching routines into asynchronous promises.
+     * @param {string} src - Asset path string.
      * @returns {Promise<HTMLImageElement>}
+     * @private
      */
     fetchIconAsset(src) {
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.src = src;
             img.onload = () => resolve(img);
-            img.onerror = () => reject(new Error(`Could not stream layout asset context: ${src}`));
+            img.onerror = () => reject(new Error(`Failed to safely stream layout asset buffer: ${src}`));
         });
     }
 
-/**
-     * Generates a virtual offscreen canvas texture block, scales the asset safely while 
-     * maintaining its native aspect ratio, rotates it, colors it, and compiles the pattern.
+    /**
+     * Compiles the custom color mask and vector rotations into a clean pattern cache.
+     * @private
      */
     generateGridPatternTexture() {
+        if (!this.iconImage) return;
+
         const offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = CONFIG.cellGridSize;
-        offscreenCanvas.height = CONFIG.cellGridSize;
+        offscreenCanvas.width = this.options.cellGridSize;
+        offscreenCanvas.height = this.options.cellGridSize;
         const oCtx = offscreenCanvas.getContext('2d');
 
-        if (!oCtx || !this.iconImage) return;
+        if (!oCtx) return;
 
-        // 1. Calculate the natural aspect ratio of your image asset
         const nativeWidth = this.iconImage.naturalWidth || this.iconImage.width;
         const nativeHeight = this.iconImage.naturalHeight || this.iconImage.height;
         const aspectRatio = nativeWidth / nativeHeight;
 
-        // 2. Determine proportional dimensions based on the max constraint size
-        let targetWidth = CONFIG.iconScaleSize;
-        let targetHeight = CONFIG.iconScaleSize;
+        let targetWidth = this.options.iconScaleSize;
+        let targetHeight = this.options.iconScaleSize;
 
         if (nativeWidth > nativeHeight) {
-            // Image is wider than it is tall
-            targetHeight = CONFIG.iconScaleSize / aspectRatio;
+            targetHeight = this.options.iconScaleSize / aspectRatio;
         } else {
-            // Image is taller than it is wide, or perfectly square
-            targetWidth = CONFIG.iconScaleSize * aspectRatio;
+            targetWidth = this.options.iconScaleSize * aspectRatio;
         }
 
-        // 3. Create the temporary coloring canvas using the corrected dimensions
         const stencilCanvas = document.createElement('canvas');
         stencilCanvas.width = targetWidth;
         stencilCanvas.height = targetHeight;
@@ -134,108 +152,108 @@ class InfiniteGridEngine {
         if (sCtx) {
             sCtx.drawImage(this.iconImage, 0, 0, targetWidth, targetHeight);
             sCtx.globalCompositeOperation = 'source-in';
-            sCtx.fillStyle = CONFIG.highlightColor; // Uses your clean blue-green highlight color fill
+            sCtx.fillStyle = this.options.highlightColor;
             sCtx.fillRect(0, 0, targetWidth, targetHeight);
         }
 
-        // 4. Anchor matrices at the absolute center of the layout cell block
-        const centerX = CONFIG.cellGridSize / 2;
-        const centerY = CONFIG.cellGridSize / 2;
+        const centerX = this.options.cellGridSize / 2;
+        const centerY = this.options.cellGridSize / 2;
 
         oCtx.save();
         oCtx.translate(centerX, centerY);
         
-        const radians = (CONFIG.rotationDegrees * Math.PI) / 180;
+        const radians = (this.options.rotationDegrees * Math.PI) / 180;
         oCtx.rotate(radians);
 
-        // 5. Render the corrected stencil using its dedicated proportional offsets
         const renderOffsetX = -(targetWidth / 2);
         const renderOffsetY = -(targetHeight / 2);
         
-        oCtx.drawImage(
-            stencilCanvas, 
-            renderOffsetX, 
-            renderOffsetY, 
-            targetWidth, 
-            targetHeight
-        );
-
+        oCtx.drawImage(stencilCanvas, renderOffsetX, renderOffsetY, targetWidth, targetHeight);
         oCtx.restore();
 
-        this.gridPattern = this.ctx.createPattern(offscreenCanvas, 'repeat');
+        this.gridPattern = this.ctxSharp.createPattern(offscreenCanvas, 'repeat');
     }
 
     /**
-     * Appends a static radial lighting hotspot over the pattern array to accentuate the screen center.
+     * Composites the ambient background vignette layer directly over the base sharp canvas layer.
+     * @param {CanvasRenderingContext2D} ctx - Target canvas rendering layer context.
+     * @private
      */
-    drawCenterSpotlightOverlay() {
-        const viewCenterX = this.canvas.width / 2;
-        const viewCenterY = this.canvas.height / 2;
-        
-        // Dynamic boundary radius calculations tied to responsive dimensions
-        const maxRadius = Math.max(this.canvas.width, this.canvas.height) * CONFIG.maxRadiusMultiplier;
+    drawBackgroundVignette(ctx) {
+        const viewCenterX = this.canvasSharp.width / 2;
+        const viewCenterY = this.canvasSharp.height / 2;
+        const maxRadius = Math.max(this.canvasSharp.width, this.canvasSharp.height) * this.options.maxRadiusMultiplier;
 
-        // Initialize standard canvas 2D radial gradient construct layout
-        const lightingGradient = this.ctx.createRadialGradient(
-            viewCenterX, viewCenterY, 0,           // Inner focal origin point
-            viewCenterX, viewCenterY, maxRadius   // Outer perimeter fallback point
+        const lightingGradient = ctx.createRadialGradient(
+            viewCenterX, viewCenterY, 0,
+            viewCenterX, viewCenterY, maxRadius
         );
 
-
-        // Populate the gradient color stops using the defined configuration array for flexible control
-        CONFIG.gradientColorStops.forEach(stop => {
+        this.options.vignetteColorStops.forEach(stop => {
             lightingGradient.addColorStop(stop.offset, stop.color);
         });
 
-
-        this.ctx.save();
-        // Destination-Over ensures the ambient overlay lives underneath the moving elements if transparency is needed,
-        // but Source-Over creates a natural fog-like vignette over the running icons.
-        this.ctx.globalCompositeOperation = 'source-over';
-        this.ctx.fillStyle = lightingGradient;
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.restore();
+        ctx.save();
+        ctx.fillStyle = lightingGradient;
+        ctx.fillRect(0, 0, this.canvasSharp.width, this.canvasSharp.height);
+        ctx.restore();
     }
 
     /**
-     * Continuous frame graphics rendering execution loop.
+     * High-performance synchronized render pipeline execution loop.
+     * @private
      */
     animationPipelineLoop() {
-        // 1. Clear frame buffer fully
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        // Clear frame buffers for both graphics layers
+        this.ctxSharp.clearRect(0, 0, this.canvasSharp.width, this.canvasSharp.height);
+        this.ctxBlurred.clearRect(0, 0, this.canvasBlurred.width, this.canvasBlurred.height);
 
         if (this.gridPattern) {
-            // 2. Increment translation metrics continuously to drive directional movement
-            this.offsetX += CONFIG.speedX;
-            this.offsetY += CONFIG.speedY;
+            // Step continuous arithmetic displacements
+            this.offsetX += this.options.speedX;
+            this.offsetY += this.options.speedY;
+            this.offsetX %= this.options.cellGridSize;
+            this.offsetY %= this.options.cellGridSize;
 
-            // 3. Keep coordinates bounded within the pattern texture size bounds to prevent integer overflows
-            this.offsetX %= CONFIG.cellGridSize;
-            this.offsetY %= CONFIG.cellGridSize;
-
-            this.ctx.save();
-            this.ctx.globalAlpha = CONFIG.globalOpacity;
-
-            // 4. Create a 2D Transformation Matrix to shift the pattern coordinates globally
             const matrix = new DOMMatrix();
             matrix.translateSelf(this.offsetX, this.offsetY);
             this.gridPattern.setTransform(matrix);
 
-            // 5. Fill the entire canvas viewport using only the shifted infinite pattern matrix
-            this.ctx.fillStyle = this.gridPattern;
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-            this.ctx.restore();
+            // 1. Paint the sharp base background canvas layer
+            this.ctxSharp.save();
+            this.ctxSharp.globalAlpha = this.options.globalOpacity;
+            this.ctxSharp.fillStyle = this.gridPattern;
+            this.ctxSharp.fillRect(0, 0, this.canvasSharp.width, this.canvasSharp.height);
+            this.ctxSharp.restore();
             
-            // 6. Draw the focal highlight directly onto the canvas view plane
-            this.drawCenterSpotlightOverlay();
+            // 2. Overlay ambient gradient directly onto the base sharp layer
+            this.drawBackgroundVignette(this.ctxSharp);
+
+            // 3. Paint the identical pattern vector matrix onto the blurred mirror layer
+            // CSS handles the sub-pixel interpolation blur transitions seamlessly on its own layer thread
+            this.ctxBlurred.save();
+            this.ctxBlurred.globalAlpha = this.options.globalOpacity;
+            this.ctxBlurred.fillStyle = this.gridPattern;
+            this.ctxBlurred.fillRect(0, 0, this.canvasBlurred.width, this.canvasBlurred.height);
+            this.ctxBlurred.restore();
         }
 
-        requestAnimationFrame(() => this.animationPipelineLoop());
+        this.animationFrameId = requestAnimationFrame(() => this.animationPipelineLoop());
+    }
+
+    /**
+     * Clean down cycle hook dismantling active event listeners and animation frames.
+     * @public
+     */
+    destroy() {
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+        }
+        window.removeEventListener('resize', this.resizeHandler);
     }
 }
 
-// Global invocation hook listener
+// Global invocation hook constructor trigger
 window.addEventListener('DOMContentLoaded', () => {
-    new InfiniteGridEngine('background-canvas');
+    new HardwareGridEngine('canvas-sharp', 'canvas-blurred');
 });

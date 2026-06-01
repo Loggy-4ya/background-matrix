@@ -3,15 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Infinite Uniform Grid Background</title>
+    <title>Hardware Accelerated Smooth Background</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             overflow: hidden;
-            background-color: #0b0f19;
+            background-color: #0b0f15;
         }
-        #background-canvas {
+
+        /* Container encapsulating both background rendering layers */
+        .bg-container {
             position: fixed;
             top: 0;
             left: 0;
@@ -20,11 +22,34 @@
             z-index: -1;
             pointer-events: none;
         }
+
+        .bg-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Layer 2: Uses GPU composite threads to process the blur and transition alpha mask smoothly */
+        #canvas-blurred {
+            filter: blur(8px); /* Clean, native CSS hardware blur */
+            transform: scale(1.02); /* Prevents edge artifacts caused by the blur filter bleeding inward */
+            
+            /* The CSS Mask determines the transition transparency. 
+               The center circle is completely clear (revealing the sharp canvas below), 
+               while it fades smoothly to solid black at the edges (revealing the blurred canvas). */
+            mask-image: radial-gradient(circle, transparent 20%, black 65%);
+            -webkit-mask-image: radial-gradient(circle, transparent 20%, black 65%);
+        }
     </style>
 </head>
 <body>
 
-    <canvas id="background-canvas"></canvas>
+    <div class="bg-container">
+        <canvas id="canvas-sharp" class="bg-layer"></canvas>
+        <canvas id="canvas-blurred" class="bg-layer"></canvas>
+    </div>
 
     <script src="app.js"></script>
 </body>
