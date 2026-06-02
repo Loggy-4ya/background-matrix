@@ -56,7 +56,7 @@ class InteractiveGridEngine {
             vignetteColorStops: [
                 { offset: 0.0, color: 'rgba(11, 15, 25, 0.0)' },   // Dynamic core gradient pocket
                 { offset: 0.7, color: 'rgba(11, 15, 25, 0.4)' },   // Smooth falloff region
-                { offset: 0.9, color: 'rgba(11, 15, 25, 1.0)' }    // Deep backdrop perimeter mask
+                { offset: 0.9, color: 'rgba(11, 15, 25, 0.75)' }    // Deep backdrop perimeter mask
             ],
             ...customOptions
         };
